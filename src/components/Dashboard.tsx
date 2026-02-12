@@ -17,16 +17,21 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
   const [isAdding, setIsAdding] = useState(false)
   const supabase = createClient()
 
-  // Real-time Update Logic (Requirement #4)
+  // Real-time Update Logic (Single Source of Truth)
   useEffect(() => {
     const channel = supabase.channel('realtime bookmarks')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bookmarks' }, (payload) => {
-        setBookmarks((curr) => [payload.new as Bookmark, ...curr])
+        setBookmarks((curr) => {
+          // Check if it already exists to prevent duplicate keys
+          if (curr.some(b => b.id === payload.new.id)) return curr;
+          return [payload.new as Bookmark, ...curr];
+        });
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'bookmarks' }, (payload) => {
         setBookmarks((curr) => curr.filter((item) => item.id !== payload.old.id))
       })
       .subscribe()
+    
     return () => { supabase.removeChannel(channel) }
   }, [supabase])
 
@@ -38,13 +43,24 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
   const handleAdd = async () => {
     if (!newUrl) return
     setIsAdding(true)
-    // Inserts bookmark (Requirement #2) - RLS handles Requirement #3
-    await supabase.from('bookmarks').insert({ 
-      title: newTitle || new URL(newUrl).hostname, 
-      url: newUrl 
-    })
+
+    // We only perform the insert. The useEffect above catches the event
+    const { error } = await supabase
+      .from('bookmarks')
+      .insert({ 
+        title: newTitle || new URL(newUrl).hostname, 
+        url: newUrl 
+      })
+
     setIsAdding(false)
-    setNewTitle(''); setNewUrl('')
+
+    if (error) {
+      console.error("Error adding bookmark:", error.message)
+    } else {
+      // Clear inputs only on success
+      setNewTitle('')
+      setNewUrl('')
+    }
   }
 
   const handleDelete = async (id: number) => {
@@ -53,7 +69,7 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
 
   return (
     <div className="min-h-screen bg-white font-sans antialiased">
-      {/* Premium Sticky Header */}
+      {/* Header */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
           <h1 className="text-xl font-bold text-black tracking-tight">Smart BookMark</h1>
@@ -94,11 +110,11 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
           </div>
         </div>
 
-        {/* Full-Width Bookmark Stack */}
+        {/* Bookmark Stack */}
         <div className="space-y-3">
           {bookmarks.length > 0 ? (
             bookmarks.map((b) => (
-              <div key={b.id} className="group flex items-center justify-between p-4 bg-white border border-gray-100 rounded-2xl hover:border-black/20 hover:shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2">
+              <div key={b.id} className="group flex items-center justify-between p-4 bg-white border border-gray-100 rounded-2xl hover:border-black/20 hover:shadow-sm transition-all">
                 <div className="flex items-center gap-4 min-w-0">
                   <div className="w-10 h-10 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0">
                     <Globe className="w-5 h-5 text-gray-400" />
