@@ -17,23 +17,44 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
   const [isAdding, setIsAdding] = useState(false)
   const supabase = createClient()
 
-  // Real-time Update Logic (Single Source of Truth)
+  // Real-time Update Logic with User-Specific Filtering
   useEffect(() => {
-    const channel = supabase.channel('realtime bookmarks')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bookmarks' }, (payload) => {
-        setBookmarks((curr) => {
-          // Check if it already exists to prevent duplicate keys
-          if (curr.some(b => b.id === payload.new.id)) return curr;
-          return [payload.new as Bookmark, ...curr];
-        });
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'bookmarks' }, (payload) => {
-        setBookmarks((curr) => curr.filter((item) => item.id !== payload.old.id))
-      })
-      .subscribe()
-    
-    return () => { supabase.removeChannel(channel) }
-  }, [supabase])
+    let channel: any;
+
+    const setupSubscription = async () => {
+      // Get current user to filter the real-time broadcast
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      channel = supabase.channel('realtime_bookmarks')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'bookmarks',
+            filter: `user_id=eq.${user.id}` // Only listen to changes for this user
+          },
+          (payload) => {
+            if (payload.eventType === 'INSERT') {
+              setBookmarks((curr) => {
+                if (curr.some(b => b.id === payload.new.id)) return curr;
+                return [payload.new as Bookmark, ...curr];
+              });
+            } else if (payload.eventType === 'DELETE') {
+              setBookmarks((curr) => curr.filter((item) => item.id !== payload.old.id));
+            }
+          }
+        )
+        .subscribe();
+    };
+
+    setupSubscription();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [supabase]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
@@ -44,7 +65,8 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
     if (!newUrl) return
     setIsAdding(true)
 
-    // We only perform the insert. The useEffect above catches the event
+    // Send the data to Supabase
+    // The useEffect above will handle the UI update via real-time broadcast
     const { error } = await supabase
       .from('bookmarks')
       .insert({ 
@@ -57,7 +79,6 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
     if (error) {
       console.error("Error adding bookmark:", error.message)
     } else {
-      // Clear inputs only on success
       setNewTitle('')
       setNewUrl('')
     }
@@ -69,7 +90,7 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
 
   return (
     <div className="min-h-screen bg-white font-sans antialiased">
-      {/* Header */}
+      {/* Premium Header */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
           <h1 className="text-xl font-bold text-black tracking-tight">Smart BookMark</h1>
@@ -81,7 +102,7 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-12">
-        {/* Single-Line Input Bar */}
+        {/* Modern Single-Line Input Bar */}
         <div className="mb-8 flex flex-col sm:flex-row gap-3">
           <div className="flex-1 bg-white border-2 border-gray-100 rounded-2xl focus-within:border-black transition-all">
             <input
@@ -110,7 +131,7 @@ export default function Dashboard({ initialBookmarks }: { initialBookmarks: Book
           </div>
         </div>
 
-        {/* Bookmark Stack */}
+        {/* Full-Width Real-time List */}
         <div className="space-y-3">
           {bookmarks.length > 0 ? (
             bookmarks.map((b) => (
